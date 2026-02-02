@@ -1598,4 +1598,226 @@ For questions about this security review, contact the Application Security team.
 
 ---
 
+## Runtime Data Security & GDPR Compliance
+
+### Overview
+
+A comprehensive analysis of runtime data security and GDPR compliance has been documented separately. See **GDPR_DATA_PRIVACY.md** for the complete guide.
+
+### Key Findings
+
+#### Data Storage Analysis
+
+**Data Types Stored:**
+1. **Session Transcripts** - `~/.clawdbot/sessions/` (JSON, plaintext, indefinite retention)
+2. **Memory Database** - `~/.clawdbot/memory/` (SQLite, unencrypted, indefinite retention)
+3. **Configuration & Credentials** - `~/.clawdbot/config/` (JSON5, plaintext, indefinite retention)
+4. **Logs** - Platform-dependent location (redacted by default)
+5. **Third-Party Data** - Sent to AI providers (OpenAI, Anthropic, Google, AWS)
+
+#### GDPR Compliance Status: ⚠️ **PARTIAL**
+
+| GDPR Requirement | Status | Gap |
+|------------------|--------|-----|
+| Lawful Processing Basis | ⚠️ Partial | Requires organizational documentation |
+| Data Minimization | ✅ Good | Only essential data collected |
+| Storage Limitation | ❌ Missing | No automatic data expiration |
+| Integrity & Confidentiality | ⚠️ Partial | No encryption at rest |
+| Right to Access | ⚠️ Manual | No automated data export |
+| Right to Erasure | ⚠️ Manual | Manual deletion required |
+| Right to Data Portability | ❌ Missing | No export in machine-readable format |
+| Data Breach Notification | ⚠️ Depends | Requires organizational procedure |
+
+#### Critical Privacy & Data Security Gaps
+
+1. **No Encryption at Rest** (HIGH)
+   - Session transcripts stored in plaintext JSON
+   - SQLite database unencrypted
+   - Configuration files contain tokens in plaintext
+   - **Impact:** Data breach if device/server compromised
+   - **Remediation:** Implement full-disk encryption; consider application-level encryption
+
+2. **Indefinite Data Retention** (HIGH)
+   - No automatic cleanup of old sessions
+   - Memory database persists forever
+   - Violates GDPR storage limitation principle
+   - **Impact:** Unnecessary data accumulation, compliance violations
+   - **Remediation:** Implement automated data retention policies
+
+3. **No Automated Data Export** (MEDIUM)
+   - Users cannot easily request their data
+   - GDPR data portability not supported
+   - **Impact:** Manual fulfillment of user rights requests
+   - **Remediation:** Implement `moltbot data export --user {id}` command
+
+4. **Third-Party Data Transfers** (MEDIUM)
+   - Data sent to USA-based AI providers
+   - May lack adequate GDPR safeguards
+   - **Impact:** International data transfer compliance issues
+   - **Remediation:** Use DPAs, SCCs; prefer local models
+
+5. **No Audit Trail** (MEDIUM)
+   - Cannot track who accessed what data
+   - No compliance logging
+   - **Impact:** Cannot demonstrate accountability
+   - **Remediation:** Implement audit logging for data access/deletion
+
+#### Recommendations for GDPR Compliance
+
+**Immediate Actions (Personal Use):**
+1. ✅ Enable full-disk encryption on device
+2. ✅ Review and accept being the data controller
+3. ✅ Verify redaction is enabled: `moltbot config get logging.redactSensitive`
+4. ⚠️ Implement manual data cleanup schedule (delete old sessions)
+5. ⚠️ Prefer local AI models to minimize data transfers
+
+**Required Actions (Organizational Use):**
+1. 📋 Conduct Data Protection Impact Assessment (DPIA)
+2. 📋 Appoint Data Protection Officer (DPO) if required
+3. 📋 Document processing activities (Art. 30 ROPA)
+4. 📋 Create privacy notice and user consent mechanism
+5. 📋 Establish data breach response plan (72-hour notification)
+6. 🔒 Enable HTTPS for gateway with valid certificates
+7. 🔒 Implement automated data retention policies
+8. 🔒 Sign Data Processing Agreements with AI providers
+9. 🔒 Create procedures for user rights requests
+10. 🔒 Conduct regular compliance audits
+
+#### Sensitive Data Logging
+
+**Current Protection:** ✅ STRONG
+
+Moltbot automatically redacts sensitive information in logs:
+- API keys: `sk-...`, `ghp-...`, `xox...`, `AIza...`, `npm_...`
+- Passwords in env vars, JSON, CLI flags
+- Bearer tokens and authorization headers  
+- PEM private keys
+
+**Configuration:**
+```bash
+# Verify redaction enabled (default: "tools")
+moltbot config get logging.redactSensitive
+
+# Options: "off" | "tools" | "all"
+```
+
+**Test Case:** `/home/runner/work/moltbot/moltbot/src/logging/redact.test.ts`
+
+#### Data Subject Rights Implementation
+
+| Right | GDPR Article | Current Support | Implementation Needed |
+|-------|--------------|-----------------|----------------------|
+| Access | Art. 15 | ⚠️ Manual | `moltbot data export --user {id}` |
+| Erasure | Art. 17 | ⚠️ Manual | `moltbot data delete --user {id}` |
+| Rectification | Art. 16 | ⚠️ Manual | `moltbot data rectify` command |
+| Portability | Art. 20 | ❌ None | Export in JSON/CSV format |
+| Object | Art. 21 | ✅ Good | Can block users immediately |
+| Restrict | Art. 18 | ⚠️ Manual | Temporary user blocking |
+
+**Manual Fulfillment:**
+```bash
+# Access: Find user's data
+grep -r "{user-id}" ~/.clawdbot/sessions/
+sqlite3 ~/.clawdbot/memory/*.sqlite "SELECT * FROM chunks WHERE content LIKE '%{user-id}%'"
+
+# Erasure: Delete user's data
+find ~/.clawdbot/sessions/ -name "*{user-id}*" -delete
+sqlite3 ~/.clawdbot/memory/*.sqlite "DELETE FROM chunks WHERE content LIKE '%{user-id}%'"
+
+# Portability: Export to JSON
+cp ~/.clawdbot/sessions/{profile}/{session}.json /export/
+```
+
+#### Third-Party Data Processors
+
+When using external AI providers, user data is transferred:
+
+| Provider | Location | GDPR Status | Retention | Training Use |
+|----------|----------|-------------|-----------|--------------|
+| OpenAI | USA | DPA available | 30 days | No (zero retention) |
+| Anthropic | USA | DPA available | Not stored | No |
+| Google Gemini | USA/Global | DPA available | User-controlled | Depends on settings |
+| AWS Bedrock | User region | BAA available | Not stored | No |
+| Local Models | On-device | N/A | User-controlled | N/A |
+
+**GDPR Requirements:**
+- Sign Data Processing Agreement (DPA) with each provider
+- Ensure Standard Contractual Clauses (SCCs) for USA transfers
+- Document lawful basis for international transfers
+- Notify users in privacy policy
+
+**Recommendation:** Prefer local models (Ollama, llama.cpp) for GDPR-sensitive deployments to eliminate third-party data transfers.
+
+#### Data Retention Policy Template
+
+**Recommended Retention Periods:**
+
+| Data Type | Personal Use | Organizational Use | Justification |
+|-----------|--------------|-------------------|---------------|
+| Session Transcripts | 1-3 years | 30-90 days | Based on business need |
+| Memory Database | As needed | 6-12 months | Knowledge base utility |
+| Logs | 90 days | 90 days (ops) / 1-2 years (security) | Operational/security requirements |
+| User Credentials | Until deleted | Until offboarding + 30 days | Account access |
+
+**Implementation (Cron Job):**
+```bash
+# Add to crontab: daily cleanup at 2 AM
+0 2 * * * find ~/.clawdbot/sessions/ -name "*.json" -mtime +90 -delete
+0 2 * * * sqlite3 ~/.clawdbot/memory/*.sqlite "DELETE FROM files WHERE updated_at < datetime('now', '-6 months')"
+```
+
+#### Documentation Artifacts Created
+
+1. **GDPR_DATA_PRIVACY.md** - Comprehensive GDPR compliance guide including:
+   - Data processing overview and legal basis
+   - Detailed data inventory with sensitivity classifications
+   - GDPR compliance status checklist
+   - User rights fulfillment procedures
+   - Data Protection Impact Assessment template
+   - Recommended retention policies
+   - Security measures and controls
+   - FAQ for common compliance questions
+
+2. **SECURITY.md (updated)** - Added runtime data security section covering:
+   - What data is stored and where
+   - Data retention and cleanup procedures
+   - Sensitive data redaction configuration
+   - GDPR compliance reference
+
+### Summary & Next Steps for Data Privacy
+
+**Critical Actions (Compliance-focused):**
+
+1. **For Personal Users:**
+   - Review GDPR_DATA_PRIVACY.md to understand your role as data controller
+   - Enable full-disk encryption on your device
+   - Set up periodic manual data cleanup
+   - Consider using local models exclusively
+
+2. **For Organizations:**
+   - Conduct DPIA before deployment
+   - Implement automated data retention (cron jobs)
+   - Create user consent and privacy notice
+   - Sign DPAs with AI providers
+   - Establish data breach response plan
+   - Train staff on GDPR compliance
+
+3. **For Contributors:**
+   - Implement encryption at rest for sensitive data
+   - Add `moltbot data export/delete` commands
+   - Create audit logging for compliance
+   - Add automated retention policy options
+   - Implement RBAC for multi-user deployments
+
+**Risk Rating for Data Privacy:** **MEDIUM-HIGH**
+
+While Moltbot has good defaults (local storage, redaction), the lack of encryption at rest, indefinite retention, and manual user rights fulfillment pose compliance risks for organizational deployments. Personal users have lower risk if using full-disk encryption.
+
+---
+
+### Contact
+For questions about this security review, contact the Application Security team.
+
+---
+
 **End of Report**
