@@ -1,0 +1,220 @@
+OpenClaw V2 (WSL2) – Security Hardening Change Report
+
+**Audience:** Claude Code / GitHub Copilot (implementation), and Kris (owner/operator)  
+**Scope:** Apply *small, testable* adjustments to a clone of the original OpenClaw repository to achieve **safe-by-default** local operation on **Windows + WSL2**, while preserving repo code wherever possible.
+
+---
+
+## Executive Summary
+
+OpenClaw V2 will remain architecturally the same “product” (Gateway + UI + Channels + Agents), but will run under a **safer infra posture** by enforcing the “5 fixes” from the security hardening guidance:
+
+1. **Non-root runtime**
+2. **No Docker socket exposure**
+3. **Localhost-only port binding + loopback bind mode**
+4. **Strict filesystem permissions (700/600)**
+5. **Externalized secrets management + log redaction**
+
+In addition, V2 keeps a **proactive assistant**, but makes proactivity **draft-first** (safe) and only permits **auto-send to self-chat** by default.
+
+---
+
+## Target V2 Runtime (WSL2)
+
+### What runs where
+
+- **Windows host:** only opens `http://localhost:<port>` (no LAN exposure)
+- **WSL2 Ubuntu:** runs OpenClaw services bound to loopback
+- **Optional:** Ollama runs locally on WSL2 for fallback/local models
+
+### Security boundary
+
+WSL2 is treated as the “computer” boundary. OpenClaw is not reachable from your LAN unless you explicitly tunnel it.
+
+---
+
+## Precise Changes (What to change and why)
+
+### 0) Add verification scripts (baseline)
+**Change**
+- Add `scripts/quick-audit.sh` (fast checks)
+- Add `scripts/security-audit.sh` (full checks)
+
+**Effect**
+- Every hardening step can be verified immediately.
+- Ensures regressions are caught early.
+
+**Why**
+- Hardening must be measurable to be trustworthy.
+
+---
+
+### 1) Bind ports to localhost only (network layer)
+**Change**
+- Add `docker-compose.override.yml` (recommended, minimal intrusion) OR modify `docker-compose.yml` if override is not used.
+- Bind ports explicitly:
+  - `127.0.0.1:18789:18789`
+  - `127.0.0.1:18790:18790`
+
+**Effect**
+- OpenClaw services are **not accessible from LAN/Internet** (prevents accidental exposure).
+
+**Why**
+- Default Docker port publishing can bind to `0.0.0.0`.
+
+---
+
+### 2) Force loopback bind mode (application layer)
+**Change**
+- Ensure OpenClaw gateway starts with: `--bind loopback`
+- Ensure `~/.openclaw/openclaw.json` includes:
+  - `gateway.bind = "loopback"`
+
+**Effect**
+- Gateway/UI bind to loopback regardless of Docker port publishing.
+
+**Why**
+- Defense in depth: even if a port mapping is misconfigured, the service itself binds to loopback.
+
+---
+
+### 3) Remove Docker socket mount (host takeover prevention)
+**Change**
+- Ensure **no** volume mapping includes:
+  - `/var/run/docker.sock:/var/run/docker.sock`
+
+**Effect**
+- Prevents “container controls host Docker daemon” escalation.
+
+**Why**
+- Docker socket access is effectively root-on-host.
+
+---
+
+### 4) Ensure container does not run as root (least privilege)
+**Change**
+- Use the image’s default `node` user (preferred), or explicitly set:
+  - `user: "1000:1000"`
+- If needed, add `USER node` at end of Dockerfile.
+
+**Effect**
+- If OpenClaw is compromised, attacker does **not** get root within the container.
+
+---
+
+### 5) Enforce strict permissions (filesystem layer)
+**Change**
+- Add `scripts/secure-permissions.sh`
+- Run it **before start** and optionally on a timer.
+- Enforce:
+  - `~/.openclaw/credentials` → `700`
+  - `~/.openclaw/openclaw.json` → `600`
+  - `~/.openclaw/agents/*/agent/auth-profiles.json` → `600` (when present)
+
+**Effect**
+- Other users on the same WSL instance cannot read OpenClaw credentials/config.
+- Reduces risk from backups, accidental sharing, or multi-user machines.
+
+---
+
+### 6) Secrets externalization + redaction (secrets layer)
+**Change**
+- Stop committing secrets (or embedding them in repo-tracked files).
+- Introduce a start wrapper script (example: `scripts/start-openclaw.sh`) that:
+  - loads secrets from a secret manager or environment
+  - exports them for startup only
+  - unsets them after
+
+- Add log redaction defaults (where supported):
+  - `logging.redactSensitive = "tools"`
+
+**Effect**
+- Secrets don’t land in git history.
+- Secrets are less likely to appear in logs.
+
+---
+
+### 7) Gateway token auth (control plane protection)
+**Change**
+- Set gateway auth to token mode:
+  - `gateway.auth.mode = "token"`
+  - `gateway.auth.token = <random>`
+- Provide helper script `scripts/rotate-gateway-token.sh`.
+
+**Effect**
+- Even localhost access requires possession of the token (prevents casual access).
+
+---
+
+## Proactive Assistant (kept, but safe)
+
+### Principle: “Draft-first proactivity”
+**Change**
+- Add a minimal **scheduler** that generates “draft suggestions”.
+- Default: **auto-send only to self-chat** and only for safe categories:
+  - reminders
+  - summaries
+  - questions (“Do you want me to…?”)
+- All other proactive outputs require explicit approval (UI action).
+
+**Effect**
+- You keep a proactive assistant (useful).
+- You avoid dangerous unattended actions triggered by prompt injection or unexpected conditions.
+
+---
+
+## Optional (recommended) hardening knobs
+
+These can be added later without changing core behavior:
+
+- `cap_drop: [ALL]` in Docker (reduce kernel attack surface)
+- memory/cpu limits (prevent runaway)
+- health checks on gateway
+
+---
+
+## Deliverables Summary (files to add/modify)
+
+### Add
+- `docker-compose.override.yml`
+- `scripts/quick-audit.sh`
+- `scripts/security-audit.sh`
+- `scripts/secure-permissions.sh`
+- `scripts/start-openclaw.sh` (or equivalent)
+- `scripts/rotate-gateway-token.sh`
+- (Proactivity) `apps/proactivity/` or `packages/proactivity/` (minimal service + draft store)
+
+### Modify
+- `~/.openclaw/openclaw.json` (runtime config defaults)
+- potentially `Dockerfile` (only if user not already non-root)
+
+---
+
+## Expected Outcome
+
+### Before (unsafe posture)
+- root container
+- docker socket exposed
+- ports on 0.0.0.0
+- 644/755 permissions
+- secrets in files/logs
+
+### After (V2 posture)
+- non-root runtime
+- no docker socket exposure
+- localhost-only + loopback bind
+- 600/700 permissions enforced automatically
+- secrets externalized + redacted
+- proactivity retained (draft-first, self-chat auto-send only)
+
+---
+
+## Acceptance Criteria (definition of “done”)
+
+1. `scripts/quick-audit.sh` prints all ✅
+2. Ports `18789/18790` listen only on `127.0.0.1`
+3. `docker compose exec openclaw-gateway whoami` != `root`
+4. `/var/run/docker.sock` is not accessible inside the container
+5. `~/.openclaw/credentials` permissions are `700`, key files `600`
+6. Logs do not contain tokens
+7. Proactivity produces drafts; auto-send only to self-chat by default
