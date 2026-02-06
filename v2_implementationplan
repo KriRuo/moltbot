@@ -1,0 +1,279 @@
+OpenClaw V2 (WSL2) – Step-by-Step Implementation Plan
+
+**Goal:** Apply small, testable changes to a clone of the original OpenClaw repo.  
+**Method:** Each step is a small PR. After each PR, run verification scripts.
+
+---
+
+## Prerequisites (WSL2)
+
+1. Ensure WSL2 Ubuntu is installed and updated.
+2. Clone the repo:
+   ```bash
+   git clone https://github.com/openclaw/openclaw.git
+   cd openclaw
+   ```
+3. Decide runtime mode:
+   - **Preferred (least change):** Docker Compose (matches hardening docs)
+   - **Optional later:** native Node service + systemd user units
+
+---
+
+## PR 0 — Add baseline audit scripts
+
+### Changes
+- Add `scripts/quick-audit.sh` (fast checks)
+- Add `scripts/security-audit.sh` (full checks)
+
+### Verify
+```bash
+bash scripts/quick-audit.sh
+```
+
+**Expected:** output exists; some checks may still fail until later PRs.
+
+---
+
+## PR 1 — Localhost-only port binding
+
+### Changes
+Create `docker-compose.override.yml` in repo root:
+
+```yaml
+services:
+  openclaw-gateway:
+    ports:
+      - "127.0.0.1:18789:18789"
+      - "127.0.0.1:18790:18790"
+```
+
+### Verify
+```bash
+docker compose up -d
+netstat -an | grep LISTEN | grep -E '18789|18790'
+```
+
+**Expected:** only `127.0.0.1:*`
+
+---
+
+## PR 2 — Enforce loopback bind mode
+
+### Changes
+In `docker-compose.override.yml`, set gateway command to include loopback bind:
+
+```yaml
+services:
+  openclaw-gateway:
+    command:
+      [
+        "node","dist/index.js","gateway",
+        "--bind","loopback",
+        "--port","18789"
+      ]
+```
+
+Also set in runtime config (`~/.openclaw/openclaw.json`):
+
+```json
+{
+  "gateway": { "bind": "loopback", "port": 18789 }
+}
+```
+
+### Verify
+```bash
+docker compose restart
+netstat -an | grep LISTEN | grep -E '18789|18790'
+```
+
+**Expected:** still localhost-only.
+
+---
+
+## PR 3 — Remove Docker socket mount
+
+### Changes
+Ensure **no** docker socket mount exists anywhere:
+- Remove any line like:
+  - `/var/run/docker.sock:/var/run/docker.sock`
+
+Your override should only mount OpenClaw data:
+
+```yaml
+services:
+  openclaw-gateway:
+    volumes:
+      - "${OPENCLAW_DATA:-$HOME/.openclaw}:/home/node/.openclaw"
+```
+
+### Verify
+```bash
+docker compose restart
+docker compose exec openclaw-gateway ls /var/run/docker.sock 2>&1
+```
+
+**Expected:** “No such file or directory”.
+
+---
+
+## PR 4 — Run as non-root user
+
+### Changes
+Prefer image default user (often `node`). If not, set explicitly:
+
+```yaml
+services:
+  openclaw-gateway:
+    user: "1000:1000"
+```
+
+If image lacks a default non-root user, update `Dockerfile` (last line):
+
+```dockerfile
+USER node
+```
+
+### Verify
+```bash
+docker compose restart
+docker compose exec openclaw-gateway whoami
+```
+
+**Expected:** not `root` (ideally `node`).
+
+---
+
+## PR 5 — Secure permissions (600/700) + start hook
+
+### Changes
+Add `scripts/secure-permissions.sh`:
+
+- Set `~/.openclaw/credentials` → `700`
+- Set `~/.openclaw/openclaw.json` → `600`
+- Set auth profiles files → `600`
+
+Run this script before starting OpenClaw (wrapper script or Make target).
+
+### Verify
+```bash
+bash scripts/secure-permissions.sh
+ls -la ~/.openclaw/credentials
+```
+
+**Expected:** `drwx------` for credentials directory.
+
+---
+
+## PR 6 — Gateway token auth + rotation script
+
+### Changes
+Update `~/.openclaw/openclaw.json`:
+
+```json
+{
+  "gateway": {
+    "auth": {
+      "mode": "token",
+      "token": "REPLACE_WITH_RANDOM"
+    }
+  }
+}
+```
+
+Add `scripts/rotate-gateway-token.sh` that generates a new token and updates config.
+
+### Verify
+- Attempt to open UI without token → denied
+- With token → works
+
+---
+
+## PR 7 — Secrets externalization + log redaction
+
+### Changes
+- Add `scripts/start-openclaw.sh`:
+  - load secrets from environment or secret manager
+  - start OpenClaw
+  - unset secrets
+- Add `.gitignore` entries for local secrets files if needed.
+- Enable log redaction defaults where supported:
+  - `logging.redactSensitive = "tools"`
+
+### Verify
+```bash
+docker compose logs | grep -E "sk-|Bearer " | wc -l
+```
+
+**Expected:** `0` (no leaked tokens in logs).
+
+---
+
+## PR 8 — Add Proactivity Scheduler (draft-first)
+
+### Changes
+Add minimal proactivity service:
+- `apps/proactivity/` (or `packages/proactivity/`)
+- Timer-based job runner (e.g., every 5 minutes)
+- Writes drafts to `~/.openclaw/drafts/` (700 permissions)
+- UI shows pending drafts (Approve / Dismiss)
+
+Default policy:
+- Auto-send allowed only to **self-chat**
+- Everything else requires approval
+
+### Verify
+- Draft appears in UI
+- Approve sends message
+- Non-self targets require approval
+
+---
+
+## PR 9 — WhatsApp safe defaults
+
+### Changes
+In `~/.openclaw/openclaw.json`, ensure:
+- `channels.whatsapp.dmPolicy` is `pairing` or `allowlist`
+- Groups require mention if supported
+
+### Verify
+- Random group chatter is ignored unless mentioned (or unless allowlisted).
+
+---
+
+## Final Verification (must pass)
+
+Run:
+```bash
+bash scripts/quick-audit.sh
+bash scripts/security-audit.sh
+```
+
+**Expected:** all checks pass, plus:
+- localhost-only ports
+- non-root runtime
+- no docker socket access
+- strict permissions
+- no secrets in logs
+- proactivity drafts working
+
+---
+
+## Operator Workflow (non-technical)
+
+- Start:
+  ```bash
+  bash scripts/start-openclaw.sh
+  ```
+- Stop:
+  ```bash
+  docker compose down
+  ```
+- Audit:
+  ```bash
+  bash scripts/quick-audit.sh
+  ```
+- Rotate gateway token:
+  ```bash
+  bash scripts/rotate-gateway-token.sh
+  ```
