@@ -17,6 +17,17 @@ For threat model + hardening guidance (including `moltbot security audit --deep`
 
 Moltbot's web interface is intended for local use only. Do **not** bind it to the public internet; it is not hardened for public exposure.
 
+### Browser Automation Security
+
+Moltbot's browser automation tools include input validation to prevent code injection in browser contexts. Functions executed in the browser are validated for dangerous patterns (network requests, storage access, credential theft, etc.) before execution.
+
+**For trusted environments only:** You can bypass validation by setting `CLAWDBOT_ALLOW_DANGEROUS_BROWSER_EVAL=1`. This should **only** be used when:
+- All browser evaluation input comes from trusted sources
+- You understand the security implications
+- You need to use patterns blocked by default validation
+
+See `SECURITY-AUDIT-REPORT.md` for details on browser evaluation security.
+
 ## Runtime Requirements
 
 ### Node.js Version
