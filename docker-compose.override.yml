@@ -5,3 +5,16 @@ services:
     ports:
       - "127.0.0.1:18789:18789"
       - "127.0.0.1:18790:18790"
+    
+    # Enforce loopback bind mode at the application level (defense in depth)
+    # Even if port mappings are misconfigured, the service binds to loopback only
+    command:
+      [
+        "node",
+        "dist/index.js",
+        "gateway",
+        "--bind",
+        "loopback",
+        "--port",
+        "18789"
+      ]
