@@ -1,4 +1,5 @@
 import type { BrowserFormField } from "./client-actions-core.js";
+import { validateOrThrow } from "./browser-eval-validator.js";
 import {
   ensurePageState,
   getPageForTargetId,
@@ -208,6 +209,22 @@ export async function fillFormViaPlaywright(opts: {
   }
 }
 
+/**
+ * Evaluate JavaScript in the browser context
+ * 
+ * ⚠️ SECURITY WARNING: This function executes JavaScript code in the browser context.
+ * The function body is validated for dangerous patterns before execution to prevent:
+ * - Data exfiltration via network requests
+ * - Credential/session theft
+ * - Malicious page manipulation
+ * 
+ * Validation can be bypassed via CLAWDBOT_ALLOW_DANGEROUS_BROWSER_EVAL environment variable,
+ * but this should ONLY be used in trusted, controlled environments.
+ * 
+ * @param opts.fn - JavaScript function body to evaluate (validated for security)
+ * @param opts.ref - Optional element reference to evaluate on
+ * @throws BrowserEvalSecurityError if dangerous patterns are detected
+ */
 export async function evaluateViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -216,6 +233,12 @@ export async function evaluateViaPlaywright(opts: {
 }): Promise<unknown> {
   const fnText = String(opts.fn ?? "").trim();
   if (!fnText) throw new Error("function is required");
+
+  // Security validation: Check for dangerous patterns before evaluation
+  // Can be bypassed with CLAWDBOT_ALLOW_DANGEROUS_BROWSER_EVAL=1 for trusted contexts
+  const allowDangerous = process.env.CLAWDBOT_ALLOW_DANGEROUS_BROWSER_EVAL === "1";
+  validateOrThrow(fnText, { allowDangerous });
+
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
