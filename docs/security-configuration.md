@@ -4,6 +4,58 @@ This guide documents the security configuration requirements for running Moltbot
 
 ## Gateway Configuration
 
+### Gateway Authentication
+
+The gateway should use token-based authentication to prevent unauthorized access, even from localhost.
+
+#### Token Authentication Setup
+
+Run the token rotation script to set up or update the gateway token:
+
+```bash
+bash scripts/rotate-gateway-token.sh
+```
+
+This will:
+1. Generate a cryptographically secure random token (32 bytes, 64 hex characters)
+2. Update or create `~/.moltbot/moltbot.json` with the token
+3. Create a backup of the existing config
+4. Set secure file permissions (600)
+
+#### Using the Token
+
+After generating a token, you'll need to provide it when accessing the gateway:
+
+**Web UI:**
+```
+http://localhost:18789/?token=YOUR_TOKEN_HERE
+```
+
+**CLI:**
+```bash
+export CLAWDBOT_GATEWAY_TOKEN=YOUR_TOKEN_HERE
+moltbot channels status
+```
+
+**Docker Compose:**
+```yaml
+environment:
+  CLAWDBOT_GATEWAY_TOKEN: YOUR_TOKEN_HERE
+```
+
+#### Token Rotation
+
+Rotate the token regularly (e.g., every 90 days) or immediately if:
+- The token may have been exposed
+- A team member leaves
+- After a security incident
+- When changing deployment environments
+
+Simply run the rotation script again:
+```bash
+bash scripts/rotate-gateway-token.sh
+```
+
 ### Loopback Bind Mode
 
 The gateway should be configured to bind to loopback (`127.0.0.1`) only. This is configured in two places for defense in depth:
