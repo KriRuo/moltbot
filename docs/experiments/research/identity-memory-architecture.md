@@ -454,7 +454,383 @@ similarity.
 
 ---
 
-## 6. Replication Checklist
+## 6. Capabilities
+
+This section explains what the identity and memory architecture actually enables — from the
+perspective of a user or integrator. These are the observable outcomes, not internal mechanisms.
+
+### 6.1 Stable, persistent identity
+
+The agent remembers who it is across every session without model retraining. Its name, tone,
+values, and communication style come from files (`SOUL.md`, `IDENTITY.md`) that persist on disk
+and are re-injected into every session. Editing a file is all it takes to change the persona.
+
+### 6.2 User-aware conversations
+
+The agent loads the user profile (`USER.md`) at the start of every session. It knows the user's
+name, preferred address form, and communication preferences without being told each time.
+
+### 6.3 Long-term factual memory
+
+Facts, decisions, and preferences mentioned in one session are available in all future sessions.
+The agent writes durable entries to `MEMORY.md` and reads them back on the next startup.
+There is no external database — a text file is the memory store.
+
+### 6.4 Daily episodic recall
+
+A date-stamped log file (`memory/YYYY-MM-DD.md`) gives the agent access to what happened
+yesterday and today. The agent can say "earlier today we decided X" or "yesterday you mentioned Y"
+because those events are literally written in the log it reads at startup.
+
+### 6.5 Semantic memory search (optional)
+
+When `memorySearch` is enabled, the agent can search past memories by meaning rather than exact
+wording. A query for "screenshot appearance" surfaces a note about "dark-mode screenshots" because
+the vector similarity score is high. Supported embedding providers: OpenAI, Gemini, and a local
+offline model.
+
+### 6.6 Pre-compaction memory preservation
+
+Before the context window fills and the conversation history is trimmed, the system automatically
+prompts the agent to write important facts to disk. The user never sees this turn. After
+compaction, the agent's next session still has access to everything written to files — no
+knowledge is lost silently.
+
+### 6.7 Proactive, scheduled behavior
+
+The `HEARTBEAT.md` file contains a checklist of things the agent should verify or do
+periodically (e.g. "check if servers are running", "remind about calendar events"). When a
+heartbeat run fires, the agent works through the checklist and logs results. This is how the
+agent stays proactive without waiting for a user message.
+
+### 6.8 Multi-agent support
+
+Multiple distinct agents with completely separate identities can run on the same host. Each agent
+has its own workspace directory, its own `SOUL.md`, and its own `MEMORY.md`. Channel bindings
+route incoming messages to the correct agent. The identities never bleed into each other.
+
+### 6.9 Temporary alternate persona (soul-evil)
+
+The soul-evil hook lets you configure a scheduled window during which the agent loads an
+alternate `SOUL_EVIL.md` instead of `SOUL.md`. The swap is in-memory only — no files are
+changed on disk — and expires automatically. Useful for testing, demonstrations, or deliberate
+personality variations at a set time.
+
+### 6.10 Sub-agent isolation
+
+When the main agent spawns a sub-agent (for research, coding tasks, etc.), the sub-agent
+receives only the operational rules (`AGENTS.md`) and tool notes (`TOOLS.md`). It does not see
+the user profile, soul doc, or long-term memories. Personal data cannot leak out via a sub-agent
+call.
+
+### 6.11 Model and provider agnosticism
+
+Because state lives entirely in files and not in model weights, the same `SOUL.md` and
+`MEMORY.md` work identically whether the active LLM is Claude, GPT-4o, or Gemini. Switching
+providers requires only a config change — the agent's identity and memory transfer automatically.
+
+### 6.12 Git-backed durability and portability
+
+The workspace is a plain directory of text files. Committing it to a private git repository
+gives free versioned backup, change history, and portability across machines. Restoring a full
+agent identity on a new host means cloning the repo and starting the gateway.
+
+---
+
+## 7. Dependencies
+
+This section lists what the identity and memory system actually depends on, separated by whether
+the dependency is required or optional.
+
+### 7.1 Runtime requirements
+
+| Requirement | Version | Notes |
+|---|---|---|
+| **Node.js** | 22+ | Required. Uses `node:sqlite` (built-in, Node 22.5+) for the vector index. |
+| **OS filesystem** | Any | The workspace is a plain directory; write access is required. |
+| **LLM provider API key** | — | At least one of Anthropic, OpenAI, or Google Gemini. The agent needs a model to run. |
+
+### 7.2 Core npm packages
+
+These packages ship with Moltbot and are required for the identity/memory features to function.
+
+| Package | Purpose |
+|---|---|
+| `@mariozechner/pi-agent-core` | Agent session lifecycle, compaction, context management, bootstrap injection |
+| `@mariozechner/pi-ai` | LLM provider adapters (Claude, GPT, Gemini) |
+| `chokidar` | Filesystem watcher for live memory index updates (watching `memory/*.md` for changes) |
+| `jiti` | TypeScript config loading (reads `moltbot.config.ts`) |
+| `sqlite-vec` | Native SQLite vector-search extension (loaded at runtime for semantic recall) |
+| `node:sqlite` | Built-in Node.js SQLite driver (no external binary needed in Node 22.5+) |
+| `node:fs`, `node:path`, `node:crypto` | Standard Node.js built-ins for all file I/O and hashing |
+
+### 7.3 Optional dependencies (vector memory search)
+
+Vector memory search (`memorySearch.enabled: true`) requires one of the following embedding
+providers. Without a provider the search falls back to keyword-only (BM25) mode.
+
+| Provider | What you need | Default model |
+|---|---|---|
+| **OpenAI** | `OPENAI_API_KEY` in env or config | `text-embedding-3-small` |
+| **Gemini** | `GEMINI_API_KEY` in env or config | `text-embedding-004` |
+| **Local** | Path to a local model file (`memorySearch.local.modelPath`) | User-supplied |
+
+### 7.4 No external services required for core features
+
+The identity and memory system at its core (file loading, bootstrap injection, compaction flush,
+daily logs, `MEMORY.md`) works with **zero external services**. It is:
+
+- **No cloud database** — memory is SQLite + Markdown on disk.
+- **No cloud file storage** — workspace is a local directory (optionally git-synced).
+- **No auth server** — the workspace is read directly from the filesystem.
+- **No network** at session start — all bootstrap files are local reads.
+
+External connectivity is only needed to call the LLM API itself and, optionally, to compute
+embeddings for semantic search.
+
+### 7.5 Configuration keys
+
+The relevant configuration lives in `~/.clawdbot/moltbot.json` (or `moltbot.config.ts`).
+
+| Config key | Default | Effect |
+|---|---|---|
+| `agents.defaults.workspace` | `~/clawd` | Path to the agent workspace directory |
+| `agents.defaults.compaction.memoryFlush.enabled` | `true` | Enables pre-compaction memory flush |
+| `agents.defaults.compaction.memoryFlush.softThresholdTokens` | `4000` | Tokens before limit to trigger flush |
+| `memorySearch.enabled` | `false` | Enables vector/keyword memory search |
+| `memorySearch.provider` | `"auto"` | Embedding provider (`openai`, `gemini`, `local`, `auto`) |
+| `memorySearch.store.path` | `~/.clawdbot/memory/<agentId>.sqlite` | SQLite index path |
+| `hooks.internal.entries.soul-evil.enabled` | `false` | Enables the alternate-persona hook |
+
+---
+
+## 8. Practical Workflows
+
+This section covers the most common day-to-day tasks you will perform with this architecture,
+presented as concrete step-by-step workflows.
+
+### 8.1 Setting up a new agent from scratch
+
+```bash
+# 1. Install Moltbot and seed the workspace
+moltbot setup
+
+# 2. Inspect the generated files
+ls ~/clawd
+# → AGENTS.md  SOUL.md  IDENTITY.md  USER.md  TOOLS.md  HEARTBEAT.md  memory/
+
+# 3. Configure your LLM provider
+moltbot config set provider.anthropic.apiKey "sk-ant-..."
+
+# 4. Start the gateway
+moltbot gateway run
+```
+
+After `moltbot setup`, all bootstrap files are populated with default templates.
+Edit them before the first session to personalize the identity.
+
+### 8.2 Customizing the agent identity
+
+Edit the files directly in the workspace:
+
+```bash
+# Change persona and values
+nano ~/clawd/SOUL.md
+
+# Change display name, emoji, avatar
+nano ~/clawd/IDENTITY.md
+
+# Update user profile (name, preferred address, communication style)
+nano ~/clawd/USER.md
+
+# Add SSH hosts, camera names, tool-specific notes
+nano ~/clawd/TOOLS.md
+```
+
+Changes take effect on the **next session start** — no gateway restart is needed because
+files are re-read at the beginning of each session.
+
+### 8.3 Asking the agent to remember something
+
+During a conversation, instruct the agent:
+
+```
+User: Remember that I always prefer dark-mode screenshots.
+
+Agent: Noted. I've added that to MEMORY.md and today's log.
+```
+
+The agent appends the note to `memory/YYYY-MM-DD.md` immediately and writes a curated
+entry to `MEMORY.md`. Starting a new session, the preference is already in context — the
+user never needs to repeat it.
+
+### 8.4 Reviewing and maintaining memory
+
+Periodically inspect and prune files to prevent context window bloat:
+
+```bash
+# View curated long-term memory
+cat ~/clawd/MEMORY.md
+
+# View today's log
+cat ~/clawd/memory/$(date +%Y-%m-%d).md
+
+# List all daily logs
+ls ~/clawd/memory/
+
+# Remove old logs you no longer need
+rm ~/clawd/memory/2024-*.md
+
+# Keep MEMORY.md concise: remove stale or superseded entries manually
+nano ~/clawd/MEMORY.md
+```
+
+Target: keep each file well under 20 000 characters to avoid truncation at bootstrap.
+
+### 8.5 Enabling and using semantic memory search
+
+```json5
+// ~/.clawdbot/moltbot.json
+{
+  "memorySearch": {
+    "enabled": true,
+    "provider": "openai"   // or "gemini" / "local"
+  }
+}
+```
+
+Once enabled, the agent gains access to `memory_search` and `memory_get` tools. During a
+session it can run:
+
+```
+memory_search("dark mode preference")
+→ MEMORY.md:14 — "Prefers dark-mode screenshots (added 2025-02-19)" — score 0.91
+```
+
+To rebuild the index after manual file edits:
+
+```bash
+moltbot memory rebuild
+```
+
+### 8.6 Backing up and restoring the agent workspace
+
+```bash
+# One-time: initialize a private git repo in the workspace
+cd ~/clawd
+git init
+git remote add origin git@github.com:yourname/my-agent-workspace.git
+echo "memory/*.md" >> .gitignore   # optional: exclude daily logs if very personal
+git add -A && git commit -m "initial workspace"
+git push -u origin main
+
+# Daily: commit after changes
+cd ~/clawd && git add -A && git commit -m "memory update $(date +%Y-%m-%d)"
+
+# Restore on a new machine
+git clone git@github.com:yourname/my-agent-workspace.git ~/clawd
+moltbot gateway run
+```
+
+The agent's complete identity and memory are now version-controlled and portable.
+
+### 8.7 Running multiple agents on the same host
+
+```json5
+// ~/.clawdbot/moltbot.json
+{
+  "agents": {
+    "list": [
+      {
+        "agentId": "aria",
+        "workspace": "~/aria-workspace",
+        "identity": { "name": "Aria", "emoji": "🌿" }
+      },
+      {
+        "agentId": "devbot",
+        "workspace": "~/devbot-workspace",
+        "identity": { "name": "Dev", "emoji": "🤖" }
+      }
+    ]
+  }
+}
+```
+
+Each workspace is seeded separately:
+
+```bash
+CLAWDBOT_PROFILE=aria moltbot setup
+CLAWDBOT_PROFILE=devbot moltbot setup
+```
+
+Configure channel bindings to route Telegram, Discord, or other channels to the desired agent.
+Each agent's memory and identity remain completely isolated.
+
+### 8.8 Setting up the soul-evil alternate persona
+
+```json5
+// ~/.clawdbot/moltbot.json
+{
+  "hooks": {
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "soul-evil": {
+          "enabled": true,
+          "file": "SOUL_EVIL.md",
+          "purge": { "at": "22:00", "duration": "60m" }
+        }
+      }
+    }
+  }
+}
+```
+
+1. Create `~/clawd/SOUL_EVIL.md` with the alternate persona.
+2. Configure the window (`at` + `duration`) in config.
+3. At the scheduled time, the gateway loads `SOUL_EVIL.md` in place of `SOUL.md` for new
+   sessions. Existing sessions are unaffected.
+4. After the window, the next session returns to the standard `SOUL.md`. No files are changed
+   on disk.
+
+### 8.9 Configuring the proactive heartbeat
+
+1. Edit `~/clawd/HEARTBEAT.md` with tasks the agent should perform proactively:
+
+```markdown
+# HEARTBEAT.md
+
+- Check if the backup server is reachable.
+- Look for unread items flagged as urgent.
+- Summarize the day's memory log and write key points to MEMORY.md.
+```
+
+2. The gateway fires a heartbeat run on schedule. During this run, the agent works through
+   the checklist, performs the tasks, and logs results to the daily memory file.
+3. No user interaction is needed; results are visible in the day's memory log.
+
+### 8.10 Diagnosing memory and identity issues
+
+```bash
+# Check workspace file status and memory index health
+moltbot memory status
+
+# Deep probe (reads and validates all memory files and index)
+moltbot memory status --deep
+
+# Run the doctor to find misconfigured or missing files
+moltbot doctor
+
+# View current identity resolution (which name/emoji is active)
+moltbot channels status --probe
+```
+
+If bootstrap files are missing, the agent still starts — but identity degrades to the default
+"Assistant" persona. Run `moltbot setup` again to regenerate any missing template files.
+
+---
+
+## 9. Replication Checklist
 
 To replicate this architecture in a new system:
 
@@ -476,7 +852,7 @@ To replicate this architecture in a new system:
 
 ---
 
-## 7. References
+## 10. References
 
 | Source | Path |
 |---|---|
